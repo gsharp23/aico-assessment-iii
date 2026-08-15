@@ -11,17 +11,18 @@ LangChain RAG chain and the two memory layers.
 """
 
 import logging
-import os
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from langchain_core.messages import AIMessage, HumanMessage
 
 import memory
 import rag
+from config import env
 
 # Structured-ish logging so the deploy workflow's `docker compose logs` is readable
 logging.basicConfig(
-    level=os.environ.get("LOG_LEVEL", "INFO"),
+    level=env("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 log = logging.getLogger("api")
@@ -69,14 +70,19 @@ def chat():
     log.info("chat: user=%s session=%s q=%r", user_id, session_id, question[:80])
 
     # 1. Pull both memory layers
-    history = memory.format_history(memory.load_history(session_id))
+    history = memory.get_session_history(session_id)
+    history_text = memory.format_history(history.messages)
     memories = memory.recall(user_id, question)
 
-    # 2. Run the RAG chain
-    answer, docs = rag.answer(question, history, memories)
+    # 2. Run the RAG chain. It returns the answer and the documents behind it.
+    result = rag.answer(question, history_text, memories)
+    answer = result["answer"]
+    docs = result["source_documents"]
+
+    log.info("chat: answered from %d chunks", len(docs))
 
     # 3. Persist the turn to both layers
-    memory.save_turn(session_id, question, answer)
+    history.add_messages([HumanMessage(question), AIMessage(answer)])
     memory.remember(user_id, question, answer)
 
     return jsonify(
@@ -102,4 +108,4 @@ def memories():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
+    app.run(host="0.0.0.0", port=int(env("PORT", "5000")))

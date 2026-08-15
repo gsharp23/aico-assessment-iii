@@ -131,20 +131,35 @@ the registry URLs from Terraform outputs at runtime.
 
 ## How the AI layer works
 
-`backend/rag.py` builds a LangChain chain in the LCEL style:
+`backend/rag.py` builds a multi-stage LCEL chain — the same composition as the
+Week 14 `municipal-ai` project, extended to carry both memory layers:
 
 ```
-question → pgvector retriever (k=3) → ChatPromptTemplate → ChatBedrock → StrOutputParser
+{question, history, memories}
+    │
+    ├─ Stage 1  RunnableParallel
+    │             source_documents = itemgetter("question") | retriever
+    │             question / history / memories passed through untouched
+    │
+    ├─ Stage 2  .assign(context = format_docs(source_documents))
+    │
+    └─ Stage 3  .assign(answer = ChatPromptTemplate | ChatBedrock | StrOutputParser)
 ```
 
-The prompt receives four inputs: retrieved `{context}`, the `{question}`, the
-`{history}` of this session, and `{memories}` — durable facts Mem0 has learned
-about the user.
+The chain returns a dict, so the API can hand back the answer *and* the documents
+that grounded it — that's where the source citations in the UI come from.
+
+Retrieval is configurable without a code change: `RETRIEVER_SEARCH_TYPE=mmr`
+switches from plain similarity to maximal marginal relevance, which pulls a wider
+candidate pool and then picks chunks that are relevant *and* different from each
+other. (These were CLI flags in the Week 14 script; here they're env vars.)
 
 `backend/memory.py` implements the two layers separately:
 
-- **Session memory** — every turn written to the `chat_messages` table in Postgres,
-  read back as LangChain `HumanMessage` / `AIMessage` objects.
+- **Session memory** — `PostgresChatHistory`, an implementation of LangChain's
+  `BaseChatMessageHistory` interface (`messages`, `add_messages`, `clear`) backed
+  by the `chat_messages` table. Because it satisfies the interface, it can be
+  swapped for any other LangChain history backend without touching the chain.
 - **Semantic memory** — turns handed to Mem0, which extracts what is worth keeping
   and returns it by relevance on later questions. Optional: with no `MEM0_API_KEY`
   the app runs fine and reports `semantic_memory: false` on `/health`.
@@ -174,6 +189,7 @@ collection is already populated, so re-running a deploy is safe.
 |---|---|
 | `/health` shows `"database": false` | `docker compose logs db` — usually `POSTGRES_PASSWORD` is unset in `.env` |
 | `AccessDeniedException` from Bedrock | Model access not enabled in this region: Bedrock console → Model access |
+| `You must specify a region` | `AWS_REGION` is blank in `.env`. Compose passes an unset variable through as an empty string, so set it explicitly (the code now falls back to `us-east-1`, but the container also needs credentials). |
 | Chat answers "not available in the provided documents" | Ingest never ran: `docker compose exec api python ingest.py` |
 | Retrieval returns irrelevant chunks | `EMBEDDING_MODEL_ID` changed after ingest — re-run with `FORCE_INGEST=1` |
 | Deploy job hangs on SSH | First boot takes ~2 min to install Docker; check `/var/log/user-data.log` on the instance |

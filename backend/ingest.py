@@ -8,20 +8,20 @@ the RAG pipeline. Run it once after the stack is up:
 """
 
 import logging
-import os
 import sys
 
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 import rag
+from config import env
 
 logging.basicConfig(level="INFO", format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("ingest")
 
-CORPUS_PATH = os.environ.get("CORPUS_PATH", "corpus/el_paso_ordinances.txt")
-CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "1000"))
-CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "150"))
+CORPUS_PATH = env("CORPUS_PATH", "corpus/el_paso_ordinances.txt")
+CHUNK_SIZE = int(env("CHUNK_SIZE", "1000"))
+CHUNK_OVERLAP = int(env("CHUNK_OVERLAP", "150"))
 
 
 def already_ingested(store) -> bool:
@@ -35,7 +35,7 @@ def already_ingested(store) -> bool:
 def main() -> int:
     store = rag.get_vector_store()
 
-    if already_ingested(store) and os.environ.get("FORCE_INGEST") != "1":
+    if already_ingested(store) and env("FORCE_INGEST") != "1":
         log.info("collection %r already populated - skipping", rag.COLLECTION_NAME)
         return 0
 

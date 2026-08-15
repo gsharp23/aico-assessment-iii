@@ -36,8 +36,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-      # AWS Bedrock
-      AWS_REGION: ${AWS_REGION}
+      # AWS Bedrock. Both region vars are set: our code reads AWS_REGION, and
+      # boto3's own resolution looks for AWS_DEFAULT_REGION.
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
       CHAT_MODEL_ID: ${CHAT_MODEL_ID}
       EMBEDDING_MODEL_ID: ${EMBEDDING_MODEL_ID}
       # On EC2 these are empty and boto3 uses the instance's IAM role instead.

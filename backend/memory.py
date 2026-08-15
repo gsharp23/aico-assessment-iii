@@ -1,65 +1,97 @@
 """
 Two layers of memory (Week 12 pattern).
 
-1. SESSION memory  - the current conversation, stored in Postgres as LangChain
-                     message objects. Short-term, scoped to one session_id.
+1. SESSION memory  - the current conversation, held in Postgres behind LangChain's
+                     BaseChatMessageHistory interface. Short-term, scoped to one
+                     session_id.
 2. SEMANTIC memory - durable facts about the user, stored in Mem0. Mem0 decides
                      what is worth remembering and returns it by relevance.
 
+Implementing BaseChatMessageHistory (rather than formatting rows by hand) means
+this is a real LangChain conversation-memory backend: it can be swapped for any
+other history implementation, or handed to RunnableWithMessageHistory, without
+touching the chain.
+
 Mem0 is optional at runtime: if MEM0_API_KEY is not set the app still works and
-just reports that semantic memory is disabled. That keeps the demo from dying
-on a missing key.
+just reports that semantic memory is disabled. That keeps the demo from dying on
+a missing key.
 """
 
-import os
-
 import psycopg
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-MEM0_API_KEY = os.environ.get("MEM0_API_KEY", "")
+from config import env, require
+
+MEM0_API_KEY = env("MEM0_API_KEY")
 
 
 def _conn():
     """Plain psycopg connection - used for the session-memory table."""
     return psycopg.connect(
-        host=os.environ.get("POSTGRES_HOST", "db"),
-        port=os.environ.get("POSTGRES_PORT", "5432"),
-        dbname=os.environ.get("POSTGRES_DB", "ragdb"),
-        user=os.environ.get("POSTGRES_USER", "raguser"),
-        password=os.environ["POSTGRES_PASSWORD"],
+        host=env("POSTGRES_HOST", "db"),
+        port=env("POSTGRES_PORT", "5432"),
+        dbname=env("POSTGRES_DB", "ragdb"),
+        user=env("POSTGRES_USER", "raguser"),
+        password=require("POSTGRES_PASSWORD"),
     )
 
 
 # ---------------------------------------------------------------- session memory
 
 
-def load_history(session_id: str):
-    """Read this session's turns back out of Postgres as LangChain messages."""
-    with _conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT role, content FROM chat_messages "
-            "WHERE session_id = %s ORDER BY created_at",
-            (session_id,),
-        )
-        rows = cur.fetchall()
+class PostgresChatHistory(BaseChatMessageHistory):
+    """LangChain conversation memory backed by the `chat_messages` table.
 
-    messages = []
-    for role, content in rows:
-        messages.append(HumanMessage(content) if role == "human" else AIMessage(content))
-    return messages
+    The interface is three members: read `messages`, `add_messages()`, `clear()`.
+    Everything the chain needs to keep a session's context comes through here.
+    """
+
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+
+    @property
+    def messages(self) -> list[BaseMessage]:
+        """Replay this session's turns as LangChain message objects."""
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT role, content FROM chat_messages "
+                "WHERE session_id = %s ORDER BY created_at",
+                (self.session_id,),
+            )
+            rows = cur.fetchall()
+
+        return [
+            HumanMessage(content) if role == "human" else AIMessage(content)
+            for role, content in rows
+        ]
+
+    def add_messages(self, messages: list[BaseMessage]) -> None:
+        """Append messages to the session. Called once per completed turn."""
+        rows = [
+            (self.session_id, "human" if m.type == "human" else "ai", m.content)
+            for m in messages
+        ]
+        with _conn() as conn, conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)",
+                rows,
+            )
+            conn.commit()
+
+    def clear(self) -> None:
+        """Drop this session's history. Required by the interface."""
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM chat_messages WHERE session_id = %s", (self.session_id,))
+            conn.commit()
 
 
-def save_turn(session_id: str, question: str, answer: str) -> None:
-    """Write one question/answer pair into the database."""
-    with _conn() as conn, conn.cursor() as cur:
-        cur.executemany(
-            "INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)",
-            [(session_id, "human", question), (session_id, "ai", answer)],
-        )
-        conn.commit()
+def get_session_history(session_id: str) -> PostgresChatHistory:
+    """Factory used by the API - the shape RunnableWithMessageHistory expects."""
+    return PostgresChatHistory(session_id)
 
 
-def format_history(messages) -> str:
+def format_history(messages: list[BaseMessage]) -> str:
     """Flatten messages into the plain text the prompt template expects."""
     label = {"human": "User", "ai": "Assistant"}
     return "\n".join(f"{label.get(m.type, m.type)}: {m.content}" for m in messages)

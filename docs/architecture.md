@@ -64,10 +64,43 @@ flowchart TB
 3. Flask runs one RAG turn:
    - reads **session memory** (this conversation) from Postgres,
    - reads **semantic memory** (durable facts about the user) from Mem0,
-   - retrieves the top-k matching chunks from **pgvector**,
-   - fills the prompt template and calls **Bedrock**,
+   - invokes the LCEL chain, which retrieves from **pgvector**, formats the
+     context, fills the prompt template and calls **Bedrock**,
    - writes the turn back to both memory layers.
 4. The answer returns with the source chunks that produced it.
+
+### The chain
+
+```mermaid
+flowchart LR
+    input["{question,<br/>history,<br/>memories}"]
+
+    subgraph s1["Stage 1 · RunnableParallel"]
+        ret["itemgetter('question')<br/>| retriever"]
+        pass["question · history · memories<br/>passed through"]
+    end
+
+    subgraph s2["Stage 2 · .assign(context)"]
+        fmt["format_docs()<br/>Documents → prompt text"]
+    end
+
+    subgraph s3["Stage 3 · .assign(answer)"]
+        chain["ChatPromptTemplate<br/>| ChatBedrock<br/>| StrOutputParser"]
+    end
+
+    out["{answer,<br/>source_documents,<br/>context, ...}"]
+
+    input --> s1
+    ret -->|source_documents| s2
+    pass --> s2
+    s2 --> s3
+    s3 --> out
+```
+
+Stage 1 keeps the raw `Document` objects alongside the generated answer, which is
+why the API can cite the exact chunks behind every response. Retrieval mode is
+configurable (`RETRIEVER_SEARCH_TYPE=similarity|mmr`) — MMR diversifies the
+retrieved context so near-duplicate ordinance passages don't fill the prompt.
 
 ### Why each tier is where it is
 
