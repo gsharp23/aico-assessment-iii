@@ -1,0 +1,65 @@
+# Three-tier stack. The same file runs the app on a laptop and on EC2 - the only
+# difference is where the images come from (see the `image:` / `build:` note below)
+# and which .env file is present.
+#
+#   web  -> nginx serving React, proxies /api        (tier 1: frontend + web server)
+#   api  -> Flask + LangChain RAG + Mem0             (tier 2: backend API)
+#   db   -> Postgres with pgvector                   (tier 3: database)
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Schema + pgvector extension, applied on first boot only.
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    # Locally this builds from source. In CI/CD the deploy workflow overrides
+    # it with the image tag pushed to ECR (docker-compose.deploy.yml).
+    build: ./backend
+    image: ${API_IMAGE:-ordinance-api:local}
+    environment:
+      # Database connection - password comes from the environment, never the repo
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # AWS Bedrock
+      AWS_REGION: ${AWS_REGION}
+      CHAT_MODEL_ID: ${CHAT_MODEL_ID}
+      EMBEDDING_MODEL_ID: ${EMBEDDING_MODEL_ID}
+      # On EC2 these are empty and boto3 uses the instance's IAM role instead.
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      # Semantic memory
+      MEM0_API_KEY: ${MEM0_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build: ./frontend
+    image: ${WEB_IMAGE:-ordinance-web:local}
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:

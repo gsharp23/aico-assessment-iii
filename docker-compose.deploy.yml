@@ -1,0 +1,53 @@
+# The compose file that runs ON THE EC2 INSTANCE.
+#
+# Identical services to docker-compose.yml, but it pulls pre-built images from
+# ECR instead of building from source - the server never needs the repo, Node,
+# or a Python toolchain. The deploy workflow copies this file plus db/init.sql
+# to the instance and sets API_IMAGE / WEB_IMAGE to the tags it just pushed.
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    image: ${API_IMAGE}
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      AWS_REGION: ${AWS_REGION}
+      CHAT_MODEL_ID: ${CHAT_MODEL_ID}
+      EMBEDDING_MODEL_ID: ${EMBEDDING_MODEL_ID}
+      MEM0_API_KEY: ${MEM0_API_KEY}
+      LOG_LEVEL: ${LOG_LEVEL}
+    # No AWS keys here: boto3 picks up the EC2 instance role automatically.
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    image: ${WEB_IMAGE}
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:

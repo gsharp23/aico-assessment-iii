@@ -1,0 +1,237 @@
+# Continuous delivery: provisions the infrastructure, builds and pushes both
+# images, deploys the stack, and verifies it is actually serving traffic.
+#
+# One click on "Run workflow" takes the app from source to a public URL.
+#
+# Nothing in this file is hardcoded: AWS credentials and application secrets come
+# from GitHub Secrets, and every address (instance IP, registry URL) is read from
+# Terraform outputs at runtime.
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_ingest:
+        description: "Re-embed the corpus even if the vector store is already populated"
+        type: boolean
+        default: false
+
+env:
+  AWS_REGION: us-east-1
+
+# Two deploys at once would fight over the Terraform state lock.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------- 1. infra
+  provision:
+    name: Provision infrastructure
+    runs-on: ubuntu-latest
+
+    outputs:
+      ec2_ip: ${{ steps.tf.outputs.ec2_ip }}
+      ecr_api: ${{ steps.tf.outputs.ecr_api }}
+      ecr_web: ${{ steps.tf.outputs.ecr_web }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Confirm which account we are deploying into
+        run: aws sts get-caller-identity
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform apply
+        id: tf
+        working-directory: terraform
+        env:
+          # Terraform reads TF_VAR_* automatically, so secrets never appear on
+          # the command line or in a committed .tfvars file.
+          TF_VAR_key_name: ${{ vars.EC2_KEY_NAME }}
+          TF_VAR_postgres_password: ${{ secrets.POSTGRES_PASSWORD }}
+          TF_VAR_mem0_api_key: ${{ secrets.MEM0_API_KEY }}
+        run: |
+          terraform init
+          terraform apply -auto-approve
+
+          # Hand the addresses to the later jobs
+          echo "ec2_ip=$(terraform output -raw ec2_public_ip)"   >> $GITHUB_OUTPUT
+          echo "ecr_api=$(terraform output -raw ecr_api_url)"    >> $GITHUB_OUTPUT
+          echo "ecr_web=$(terraform output -raw ecr_web_url)"    >> $GITHUB_OUTPUT
+
+      - name: Log the results to the run summary
+        working-directory: terraform
+        run: |
+          {
+            echo "### Infrastructure ready"
+            echo "- App URL: $(terraform output -raw app_url)"
+            echo "- Instance: $(terraform output -raw ec2_public_ip)"
+            echo "- Secret: $(terraform output -raw secret_name)"
+          } >> $GITHUB_STEP_SUMMARY
+
+  # ---------------------------------------------------------------- 2. images
+  build:
+    name: Build and push ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    needs: provision
+
+    strategy:
+      matrix:
+        include:
+          - name: api
+            context: ./backend
+          - name: web
+            context: ./frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Tag with the commit SHA so every deploy is traceable to exact source,
+      # and also with :latest so a rollback target is easy to find.
+      - name: Build and push
+        run: |
+          REPO=$([ "${{ matrix.name }}" = "api" ] \
+            && echo "${{ needs.provision.outputs.ecr_api }}" \
+            || echo "${{ needs.provision.outputs.ecr_web }}")
+
+          docker build -t "$REPO:${{ github.sha }}" -t "$REPO:latest" ${{ matrix.context }}
+          docker push "$REPO:${{ github.sha }}"
+          docker push "$REPO:latest"
+          echo "pushed $REPO:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+
+  # ---------------------------------------------------------------- 3. deploy
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: [provision, build]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Wait for a first-boot instance to finish installing Docker before
+      # trying to talk to it.
+      - name: Wait for the instance to accept SSH
+        run: |
+          for i in $(seq 1 30); do
+            if nc -z -w 5 ${{ needs.provision.outputs.ec2_ip }} 22; then
+              echo "SSH is up"; exit 0
+            fi
+            echo "attempt $i: not ready yet"; sleep 10
+          done
+          echo "instance never became reachable"; exit 1
+
+      - name: Copy the compose file and schema to the instance
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ needs.provision.outputs.ec2_ip }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "docker-compose.deploy.yml,db/init.sql"
+          target: /home/ubuntu/app
+          strip_components: 0
+
+      - name: Pull the images and start the stack
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          API_IMAGE: ${{ needs.provision.outputs.ecr_api }}:${{ github.sha }}
+          WEB_IMAGE: ${{ needs.provision.outputs.ecr_web }}:${{ github.sha }}
+        with:
+          host: ${{ needs.provision.outputs.ec2_ip }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: API_IMAGE,WEB_IMAGE
+          script: |
+            set -e
+            cd /home/ubuntu/app
+            mv -f db/init.sql init.sql 2>/dev/null || true
+
+            # The bootstrap wrote .env from Secrets Manager; append this run's
+            # image tags so compose knows what to pull.
+            grep -v '^API_IMAGE=\|^WEB_IMAGE=' .env > .env.tmp && mv .env.tmp .env
+            echo "API_IMAGE=$API_IMAGE" >> .env
+            echo "WEB_IMAGE=$WEB_IMAGE" >> .env
+
+            # The instance role authorises the pull - no registry password needed.
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} \
+              | sudo docker login --username AWS --password-stdin \
+                "$(echo $API_IMAGE | cut -d/ -f1)"
+
+            sudo docker compose -f docker-compose.deploy.yml pull
+            sudo docker compose -f docker-compose.deploy.yml up -d
+            sudo docker compose -f docker-compose.deploy.yml ps
+
+      - name: Load the knowledge base into pgvector
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          FORCE_INGEST: ${{ inputs.force_ingest && '1' || '0' }}
+        with:
+          host: ${{ needs.provision.outputs.ec2_ip }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: FORCE_INGEST
+          script: |
+            cd /home/ubuntu/app
+            # Skips itself if the collection is already populated.
+            sudo -E docker compose -f docker-compose.deploy.yml exec -T \
+              -e FORCE_INGEST="$FORCE_INGEST" api python ingest.py
+
+      - name: Smoke test the deployment
+        run: |
+          IP=${{ needs.provision.outputs.ec2_ip }}
+
+          echo "--- waiting for the API to report healthy ---"
+          for i in $(seq 1 20); do
+            if curl -fsS "http://$IP/api/health" | tee /tmp/health.json | grep -q '"status": *"ok"'; then
+              echo "healthy"; break
+            fi
+            echo "attempt $i: not healthy yet"; sleep 10
+            [ "$i" = "20" ] && { echo "never became healthy"; exit 1; }
+          done
+
+          echo "--- the frontend is being served ---"
+          curl -fsS -o /dev/null -w "web returned HTTP %{http_code}\n" "http://$IP/"
+
+          echo "--- a real question reaches the RAG chain ---"
+          curl -fsS -X POST "http://$IP/api/chat" \
+            -H 'Content-Type: application/json' \
+            -d '{"question":"What does the code say about fences?"}' \
+            | head -c 400
+
+          {
+            echo "### Deployment verified"
+            echo "**Live at http://$IP**"
+            echo '```json'
+            cat /tmp/health.json
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Show container logs if anything failed
+        if: failure()
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ needs.provision.outputs.ec2_ip }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd /home/ubuntu/app
+            sudo docker compose -f docker-compose.deploy.yml ps
+            sudo docker compose -f docker-compose.deploy.yml logs --tail 80

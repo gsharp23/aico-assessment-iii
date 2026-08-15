@@ -1,0 +1,12 @@
+# Explicit lint configuration so `ruff check` behaves the same locally and in CI.
+
+line-length = 100
+
+[lint]
+# E/W = pycodestyle, F = pyflakes, I = import sorting, B = common bugs,
+# UP = outdated syntax.
+select = ["E", "W", "F", "I", "B", "UP"]
+
+[lint.per-file-ignores]
+# Tests reach into private helpers (memory._conn) on purpose.
+"test_*.py" = ["SLF001"]

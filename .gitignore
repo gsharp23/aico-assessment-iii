@@ -1,0 +1,22 @@
+# Secrets and local config
+.env
+*.pem
+*.tfvars
+!*.tfvars.example
+
+# Terraform
+# Note: .terraform.lock.hcl is intentionally NOT ignored - committing it pins
+# provider versions so CI and your laptop resolve identically.
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.pytest_cache/
+
+# Node
+node_modules/
+dist/

@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars for local applies. Gitignored.
+# CI passes these as TF_VAR_* environment variables from GitHub Secrets instead.
+
+key_name          = "aico-echo"
+postgres_password = "set-a-real-password"
+mem0_api_key      = ""

@@ -1,0 +1,44 @@
+# Tears the whole stack down so the demo does not keep billing.
+# Manual only, and it requires typing the project name to confirm.
+
+name: Destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "assessment-iii" to confirm destruction'
+        required: true
+
+jobs:
+  destroy:
+    name: Terraform destroy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check the confirmation phrase
+        if: inputs.confirm != 'assessment-iii'
+        run: |
+          echo "Confirmation did not match - nothing was destroyed."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Destroy
+        working-directory: terraform
+        env:
+          TF_VAR_key_name: ${{ vars.EC2_KEY_NAME }}
+          TF_VAR_postgres_password: ${{ secrets.POSTGRES_PASSWORD }}
+          TF_VAR_mem0_api_key: ${{ secrets.MEM0_API_KEY }}
+        run: |
+          terraform init
+          terraform destroy -auto-approve
+          echo "### All resources destroyed" >> $GITHUB_STEP_SUMMARY

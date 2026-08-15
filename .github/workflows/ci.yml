@@ -1,0 +1,93 @@
+# Continuous integration: runs on every push and pull request.
+# Nothing here touches AWS - it needs no credentials and costs nothing.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend:
+    name: Lint and test the API
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Lint with Ruff
+        run: ruff check backend/
+
+      - name: Run unit tests
+        working-directory: backend
+        run: pytest -v
+
+  compose:
+    name: Validate the Compose files
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Catches YAML and interpolation mistakes before they reach the server.
+      - name: Validate docker-compose.yml
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          echo "local compose file is valid"
+
+      - name: Validate docker-compose.deploy.yml
+        run: |
+          API_IMAGE=placeholder WEB_IMAGE=placeholder \
+          docker compose -f docker-compose.deploy.yml config --quiet
+          echo "deploy compose file is valid"
+
+  images:
+    name: Build both images
+    runs-on: ubuntu-latest
+    # Only build after the code passes - no point burning minutes on a red test.
+    needs: [backend, compose]
+
+    strategy:
+      matrix:
+        include:
+          - name: api
+            context: ./backend
+          - name: web
+            context: ./frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the ${{ matrix.name }} image
+        run: docker build -t ${{ matrix.name }}:ci ${{ matrix.context }}
+
+  terraform:
+    name: Check the Terraform
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Check formatting
+        run: terraform -chdir=terraform fmt -check -recursive
+
+      # -backend=false validates the syntax without needing AWS credentials.
+      - name: Validate the configuration
+        run: |
+          terraform -chdir=terraform init -backend=false
+          terraform -chdir=terraform validate

@@ -1,0 +1,23 @@
+# API
+flask==3.1.0
+flask-cors==5.0.0
+gunicorn==23.0.0
+
+# LangChain + AWS Bedrock (Week 13 stack)
+langchain-core==0.3.29
+langchain-aws==0.2.10
+langchain-community==0.3.14
+langchain-text-splitters==0.3.5
+boto3==1.35.90
+
+# pgvector-backed vector store
+langchain-postgres==0.0.12
+psycopg[binary]==3.2.3
+
+# Semantic memory (Week 12)
+mem0ai==0.1.44
+
+# Tooling
+python-dotenv==1.0.1
+pytest==8.3.4
+ruff==0.8.6
