@@ -15,6 +15,22 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
+# Bedrock needs credentials. On EC2 the instance role supplies them, but locally
+# they have to be passed into the container - pull them from the AWS CLI config
+# so they never have to be pasted into .env by hand.
+. ./.env
+if [ -z "${AWS_ACCESS_KEY_ID:-}" ]; then
+  export AWS_ACCESS_KEY_ID="$(aws configure get aws_access_key_id)"
+  export AWS_SECRET_ACCESS_KEY="$(aws configure get aws_secret_access_key)"
+  export AWS_SESSION_TOKEN="$(aws configure get aws_session_token || true)"
+
+  if [ -z "$AWS_ACCESS_KEY_ID" ]; then
+    echo "!! No AWS credentials found. Run 'aws configure' or set them in .env."
+    exit 1
+  fi
+  echo ">> Using AWS credentials from the AWS CLI config"
+fi
+
 echo ">> Building and starting the three services"
 docker compose up -d --build
 
