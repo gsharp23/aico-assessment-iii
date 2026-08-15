@@ -37,7 +37,7 @@ jobs:
       ecr_web: ${{ steps.tf.outputs.ecr_web }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -49,7 +49,7 @@ jobs:
       - name: Confirm which account we are deploying into
         run: aws sts get-caller-identity
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
 
       - name: Terraform apply
         id: tf
@@ -94,7 +94,7 @@ jobs:
             context: ./frontend
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -125,7 +125,7 @@ jobs:
     needs: [provision, build]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Wait for a first-boot instance to finish installing Docker before
       # trying to talk to it.
