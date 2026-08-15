@@ -189,7 +189,7 @@ collection is already populated, so re-running a deploy is safe.
 |---|---|
 | `/health` shows `"database": false` | `docker compose logs db` — usually `POSTGRES_PASSWORD` is unset in `.env` |
 | `AccessDeniedException` from Bedrock | Model access not enabled in this region: Bedrock console → Model access |
-| `You must specify a region` | `AWS_REGION` is blank in `.env`. Compose passes an unset variable through as an empty string, so set it explicitly (the code now falls back to `us-east-1`, but the container also needs credentials). |
+| `You must specify a region` (from `ChatBedrockConverse`) | Nova models use the Converse API, so langchain_aws rebuilds the chat model internally and drops the boto3 client it was given. `ChatBedrock` must therefore be constructed with `region_name=` as well as `client=`. Works outside Docker even without it, because `~/.aws/config` supplies a region — inside the container there is no config file. Compose also sets `AWS_DEFAULT_REGION` as a second line of defence. |
 | Chat answers "not available in the provided documents" | Ingest never ran: `docker compose exec api python ingest.py` |
 | Retrieval returns irrelevant chunks | `EMBEDDING_MODEL_ID` changed after ingest — re-run with `FORCE_INGEST=1` |
 | Deploy job hangs on SSH | First boot takes ~2 min to install Docker; check `/var/log/user-data.log` on the instance |

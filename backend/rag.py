@@ -72,7 +72,11 @@ def get_bedrock_client():
 def get_embeddings() -> BedrockEmbeddings:
     """Titan embeddings. The same model MUST be used for ingest and for query,
     otherwise the vectors live in different spaces and retrieval returns garbage."""
-    return BedrockEmbeddings(client=get_bedrock_client(), model_id=EMBEDDING_MODEL_ID)
+    return BedrockEmbeddings(
+        client=get_bedrock_client(),
+        model_id=EMBEDDING_MODEL_ID,
+        region_name=AWS_REGION,  # see build_chain() for why this is not redundant
+    )
 
 
 def get_vector_store() -> PGVector:
@@ -153,9 +157,21 @@ def build_chain(retriever=None):
     if retriever is None:
         retriever = build_retriever(get_vector_store())
 
+    # region_name looks redundant next to client, but it is required.
+    #
+    # Nova models only support the Bedrock Converse API, so at call time
+    # langchain_aws internally rebuilds this object as a ChatBedrockConverse -
+    # and that new object does NOT inherit the client passed here. It resolves
+    # its own region from `region_name`, falling back to boto3, which reads
+    # AWS_DEFAULT_REGION (not AWS_REGION) from the environment.
+    #
+    # Outside Docker this is masked by ~/.aws/config supplying a region. Inside
+    # the container there is no config file, so without region_name the call
+    # fails with "You must specify a region".
     llm = ChatBedrock(
         client=get_bedrock_client(),
         model_id=CHAT_MODEL_ID,
+        region_name=AWS_REGION,
         model_kwargs={"max_tokens": 1000, "temperature": 0.2},
     )
 
