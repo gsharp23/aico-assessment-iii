@@ -139,6 +139,30 @@ jobs:
           done
           echo "instance never became reachable"; exit 1
 
+      # Port 22 answers within ~30s, but cloud-init is still installing Docker
+      # for several minutes after that. Wait for the bootstrap marker the
+      # user_data script writes when it has genuinely finished.
+      - name: Wait for the instance bootstrap to finish
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ needs.provision.outputs.ec2_ip }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 15m
+          script: |
+            for i in $(seq 1 60); do
+              if [ -f /home/ubuntu/app/.bootstrap-done ] && command -v docker >/dev/null 2>&1; then
+                echo "bootstrap complete after $((i*10))s"
+                docker --version
+                exit 0
+              fi
+              echo "attempt $i: still bootstrapping"
+              sleep 10
+            done
+            echo "bootstrap did not finish in 10 minutes - user_data log:"
+            sudo tail -40 /var/log/user-data.log
+            exit 1
+
       - name: Copy the compose file and schema to the instance
         uses: appleboy/scp-action@v0.1.7
         with:
