@@ -35,13 +35,13 @@ from langchain_postgres import PGVector
 
 from config import env, require
 
-
+# --- Configuration: every value comes from the environment, nothing hardcoded ---
 AWS_REGION = env("AWS_REGION", "us-east-1")
 CHAT_MODEL_ID = env("CHAT_MODEL_ID", "us.amazon.nova-lite-v1:0")
 EMBEDDING_MODEL_ID = env("EMBEDDING_MODEL_ID", "amazon.titan-embed-text-v2:0")
 COLLECTION_NAME = env("COLLECTION_NAME", "el_paso_ordinances")
 
-
+# Retrieval-quality knobs. These were CLI flags in the Week 14 script; here they
 # are environment variables so the deployed app can be tuned without a rebuild.
 SEARCH_TYPE = env("RETRIEVER_SEARCH_TYPE", "similarity")  # similarity | mmr
 RETRIEVER_K = int(env("RETRIEVER_K", "3"))
