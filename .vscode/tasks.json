@@ -1,0 +1,90 @@
+{
+  // Run any of these with:  Ctrl+Shift+P -> "Tasks: Run Task"
+  // "Terraform: plan" is the default build task (Ctrl+Shift+B).
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Terraform: init",
+      "type": "shell",
+      "command": "terraform init",
+      "options": { "cwd": "${workspaceFolder}/terraform" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "Terraform: validate",
+      "type": "shell",
+      "command": "terraform validate",
+      "options": { "cwd": "${workspaceFolder}/terraform" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Terraform: plan",
+      "type": "shell",
+      // -input=false fails loudly on a missing variable instead of hanging on a
+      // prompt. Values come from terraform.tfvars (gitignored).
+      "command": "terraform plan -input=false",
+      "options": { "cwd": "${workspaceFolder}/terraform" },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "Terraform: apply (infrastructure only)",
+      "type": "shell",
+      // Deliberately interactive - you type 'yes'. This creates EMPTY infra;
+      // it does not deploy the app. Use "Pipeline: Deploy" for a running app.
+      "command": "terraform apply",
+      "options": { "cwd": "${workspaceFolder}/terraform" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "Terraform: destroy",
+      "type": "shell",
+      "command": "terraform destroy",
+      "options": { "cwd": "${workspaceFolder}/terraform" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "Terraform: show outputs",
+      "type": "shell",
+      "command": "terraform output",
+      "options": { "cwd": "${workspaceFolder}/terraform" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Pipeline: Deploy (full stack to AWS)",
+      "type": "shell",
+      "command": "gh workflow run deploy.yml && sleep 12 && gh run watch $(gh run list --workflow=deploy.yml --limit 1 --json databaseId -q '.[0].databaseId')",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "Pipeline: Destroy (tear down AWS)",
+      "type": "shell",
+      "command": "gh workflow run destroy.yml -f confirm=assessment-iii && sleep 12 && gh run watch $(gh run list --workflow=destroy.yml --limit 1 --json databaseId -q '.[0].databaseId')",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "App: run locally",
+      "type": "shell",
+      "command": "./scripts/local-up.sh",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "Tests: pytest",
+      "type": "shell",
+      "command": "pytest -v",
+      "options": { "cwd": "${workspaceFolder}/backend" },
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    }
+  ]
+}

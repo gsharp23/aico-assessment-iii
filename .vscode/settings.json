@@ -1,0 +1,13 @@
+{
+  // Format .tf files on save so `terraform fmt -check` in CI never fails.
+  "[terraform]": {
+    "editor.defaultFormatter": "hashicorp.terraform",
+    "editor.formatOnSave": true
+  },
+  "[terraform-vars]": {
+    "editor.defaultFormatter": "hashicorp.terraform",
+    "editor.formatOnSave": true
+  },
+  "terraform.languageServer.enable": true,
+  "files.associations": { "*.tfvars.example": "terraform-vars" }
+}
